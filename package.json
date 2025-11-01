@@ -1,0 +1,171 @@
+{
+  "name": "openai-smart-commit",
+  "displayName": "OpenAI Smart Commit",
+  "description": "Generate Jira Smart Commits (2 lines) with a custom prompt using OpenAI.",
+  "publisher": "local-publisher",
+  "version": "0.4.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "SCM",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:openaiSmartCommit.generate"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "openaiSmartCommit.generate",
+        "title": "Generate Smart Commit (OpenAI)",
+        "category": "Git",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "openaiSmartCommit.setJiraToken",
+        "title": "OpenAI Smart Commit: Set Jira API Token"
+      }
+    ],
+    "menus": {
+      "scm/inputBox": [
+        {
+          "command": "openaiSmartCommit.generate",
+          "group": "navigation@1",
+          "when": "scmProvider == git"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "openaiSmartCommit.generate",
+          "when": "scmProvider == git"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "openaiSmartCommit.generate",
+          "group": "navigation@9",
+          "when": "scmProvider == git"
+        }
+      ]
+    },
+    "configuration": {
+      "type": "object",
+      "title": "OpenAI Smart Commit",
+      "properties": {
+        "openaiSmartCommit.apiKey": {
+          "type": "string",
+          "markdownDescription": "OpenAI API Key (или оставьте пустым и используйте переменную окружения OPENAI_API_KEY).",
+          "default": ""
+        },
+        "openaiSmartCommit.model": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "OpenAI model"
+        },
+        "openaiSmartCommit.endpoint": {
+          "type": "string",
+          "default": "https://api.openai.com/v1/chat/completions",
+          "description": "OpenAI Chat Completions endpoint"
+        },
+        "openaiSmartCommit.temperature": {
+          "type": "number",
+          "default": 0.2
+        },
+        "openaiSmartCommit.maxTokens": {
+          "type": "number",
+          "default": 512
+        },
+        "openaiSmartCommit.timeDefault": {
+          "type": "string",
+          "default": "30m",
+          "description": "Default #time estimate"
+        },
+        "openaiSmartCommit.holisticMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Holistic two-pass generation: analyze all changes first (JSON), then compose a single commit message"
+        },
+        "openaiSmartCommit.prompt": {
+          "type": "string",
+          "default": "You are an assistant generating a JIRA Smart Commit for Git. Input: branch name, list of changed files, and diff. If an issue key is provided externally it will be added; otherwise DO NOT include any issue key.\n\nDetermine `type` from files:\n- infra: infra/, terraform/, *.tf, *.hcl, ansible/, k8s/, helm/, Dockerfile, .dockerignore\n- ci: .github/workflows/, .gitlab-ci.yml, Jenkinsfile, azure-pipelines.yml\n- docs: docs/, *.md, *.adoc, CHANGELOG*\n- test: only tests/, __tests__/, *.test.*, *.spec.*\n- feat: new public APIs/features, new endpoints/commands/flags\n- fix: bug fixes, crashes, regressions\n- refactor: restructure without behavior change\n- chore: configs, deps, small non-behavioral tweaks\nIf multiple match, prefer: infra/ci > fix/feat > refactor/chore > docs/test. Use `scope` as top-level folder/component (api, web, infra, ci, db, auth). If unclear — omit parentheses.\n\nOUTPUT FORMAT (tolerant, multi-line):\n1) type(scope): <short English subject, 6–10 words, no period>  (if an issue key is externally provided, it will be prefixed before this)\n2) 1–4 lines in Russian explaining what/why/impact (no tags, just text)\n3) Final line only: #time <estimate placeholder>\nDo NOT include #in-progress. Keep Russian lines concise (normal 12–18 words; detailed 18–30 words); mention key files/paths or env (prod/stage) when relevant.\nReturn only the lines above without extra prose or code fences.",
+          "markdownDescription": "Custom system prompt (по умолчанию — Jira Smart Commit шаблон)."
+        },
+        "openaiSmartCommit.includeUntracked": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ],
+          "default": "always",
+          "description": "Include untracked files: auto (only when nothing staged), always, or never"
+        },
+        "openaiSmartCommit.autoStage": {
+          "type": "string",
+          "enum": [
+            "off",
+            "new",
+            "all"
+          ],
+          "default": "all",
+          "description": "Auto stage before generation: off, new (only untracked), or all (git add -A)"
+        },
+        "openaiSmartCommit.issuePicker": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a Jira issue Quick Pick before generation"
+        },
+        "openaiSmartCommit.jira.baseUrl": {
+          "type": "string",
+          "default": "https://jira.nau.io",
+          "markdownDescription": "Jira base URL, e.g. https://your-org.atlassian.net"
+        },
+        "openaiSmartCommit.jira.apiToken": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional: Jira API token (prefer storing via command or env JIRA_API_TOKEN)"
+        },
+        "openaiSmartCommit.jira.jql": {
+          "type": "string",
+          "default": "assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC",
+          "markdownDescription": "JQL used to list issues in Quick Pick"
+        },
+        "openaiSmartCommit.jira.maxIssues": {
+          "type": "number",
+          "default": 50,
+          "description": "Max issues to fetch for Quick Pick"
+        },
+        "openaiSmartCommit.commentDetail": {
+          "type": "string",
+          "enum": [
+            "brief",
+            "normal",
+            "detailed"
+          ],
+          "default": "detailed",
+          "description": "Controls #comment length: brief (8–12), normal (12–18), detailed (18–30) words"
+        },
+        "openaiSmartCommit.enforceDetailedComment": {
+          "type": "boolean",
+          "default": true,
+          "description": "Post-process to ensure minimum words in #comment by adding concise details from files/env"
+        },
+        "openaiSmartCommit.minCommentWordsNormal": {
+          "type": "number",
+          "default": 12,
+          "description": "Minimum words for normal #comment if enforcement is enabled"
+        },
+        "openaiSmartCommit.minCommentWordsDetailed": {
+          "type": "number",
+          "default": 18,
+          "description": "Minimum words for detailed #comment if enforcement is enabled"
+        }
+      }
+    }
+  },
+  "license": "MIT",
+  "dependencies": {}
+}
