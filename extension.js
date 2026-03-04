@@ -24,6 +24,23 @@ function postJson(urlStr, headers, body) {
   });
 }
 
+// Newer OpenAI models (o1, o3, GPT-4.1, GPT-5, o4-mini, etc.) require:
+//   - max_completion_tokens instead of max_tokens
+//   - no temperature parameter (they ignore or reject it)
+function isReasoningModel(model) {
+  return /^o[1-9][\-b]|^o[1-9]$|^gpt-4\.1|^gpt-5/.test(model || '');
+}
+
+function buildApiBody(model, temperature, maxTokens, messages) {
+  const reasoning = isReasoningModel(model);
+  const body = { model, messages };
+  if (!reasoning) body.temperature = temperature;
+  if (maxTokens > 0) {
+    body[reasoning ? 'max_completion_tokens' : 'max_tokens'] = maxTokens;
+  }
+  return body;
+}
+
 async function generate(repo, selectedKey) {
   const cwd = repo.rootUri.fsPath;
   const branch = sh('git rev-parse --abbrev-ref HEAD', cwd);
@@ -71,9 +88,15 @@ async function generate(repo, selectedKey) {
     const holistic = vscode.workspace.getConfiguration('openaiSmartCommit').get('holisticMode');
     if (holistic) {
       const jiraSummary = selectedKey ? (await getJiraSummarySafe(jiraBase, jiraTokenSetting, selectedKey)) : '';
-      const sys1 = 'You are a senior release engineer. Analyze the change set and return ONLY compact JSON with fields: {"type":"feat|fix|refactor|infra|ci|docs|test|chore","scope":"string or empty","subject_en":"6-10 words, imperative, no period","comment_ru":"1-4 lines Russian, each 12-24 words, explain what/why/effect; no tags, no file names"}. No prose, no code fences.';
+      const sys1 = `You are a senior software engineer writing commit messages. Analyze the diff carefully and return ONLY valid JSON — no prose, no code fences — with these fields:
+{
+  "type": "feat|fix|refactor|infra|ci|docs|test|chore",
+  "scope": "top-level component/folder or empty string",
+  "subject_en": "6-10 words, imperative mood, no period — describe the concrete action (e.g. 'add retry logic for failed deployments')",
+  "comment_ru": "2-4 sentences in Russian. Each sentence 12-24 words. Explain: (1) what exactly changed in the code — specific functions, config keys, logic; (2) why this change was needed or what problem it solves; (3) expected effect or impact. Be specific — do NOT write generic phrases like 'обновлены файлы конфигурации'. Reference actual identifiers, values or behaviour from the diff."
+}`;
       const user1 = `branch=${branch}\nissue=${selectedKey||''}\njira_summary=${jiraSummary||''}\nfiles=[${files.join(', ')}]\ndiff:\n${diff}`;
-      const body1 = { model, temperature, max_tokens: maxTokens, messages: [ { role: 'system', content: sys1 }, { role: 'user', content: user1 } ] };
+      const body1 = buildApiBody(model, temperature, maxTokens, [ { role: 'system', content: sys1 }, { role: 'user', content: user1 } ]);
       const res1 = await postJson(endpoint, { Authorization: `Bearer ${apiKey}` }, body1);
       let txt = (res1?.choices?.[0]?.message?.content || '').trim();
       txt = txt.replace(/^```[a-zA-Z0-9]*\n?/g, '').replace(/```$/g, '').trim();
@@ -95,7 +118,7 @@ async function generate(repo, selectedKey) {
 
   const system = prompt || 'You are an assistant generating a JIRA Smart Commit. Return exactly two lines.';
   const user = `branch=${branch}\nfiles=[${files.join(', ')}]\ndiff:\n${diff}`;
-  const body = { model, temperature, max_tokens: maxTokens, messages: [ { role: 'system', content: system }, { role: 'user', content: user } ] };
+  const body = buildApiBody(model, temperature, maxTokens, [ { role: 'system', content: system }, { role: 'user', content: user } ]);
   const json = await postJson(endpoint, { Authorization: `Bearer ${apiKey}` }, body);
   let content = (json?.choices?.[0]?.message?.content || '').trim();
   // Tolerate code fences / numbering / extra text
@@ -370,14 +393,11 @@ function formatMinutes(mins) {
   return h > 0 ? `${h}h${m}m` : `${m}m`;
 }
 
-function ensureCommentDetail(text, files, diff, minWords) {
+function ensureCommentDetail(text, _files, _diff, minWords) {
   const count = (text.trim().match(/\S+/g) || []).length;
   if (count >= minWords) return text;
-  // Не перечисляем файлы/окружения; добавляем общие подробности по мотивации/влиянию
-  const changes = (diff || '').split('\n').filter(l => l.startsWith('+') || l.startsWith('-')).length;
-  const hints = [];
-  if (changes > 0) hints.push('пояснены причины и ожидаемый эффект');
-  if (changes > 100) hints.push('затронуты значимые части конфигурации');
-  const extra = hints.length ? ' — ' + hints.join('; ') : '';
-  return (text && text.length ? text : 'Расширенный комментарий по изменениям') + extra;
+  // If the model returned an empty or too-short comment, return it as-is rather
+  // than appending meaningless generic phrases — a short honest comment is better
+  // than a padded generic one.
+  return text || '';
 }
